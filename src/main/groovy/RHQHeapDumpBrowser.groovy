@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+
 import groovy.json.JsonOutput
 import groovyx.net.http.ContentType
 import groovyx.net.http.RESTClient
@@ -51,14 +52,34 @@ class RHQHeapDumpBrowser {
         def childResourcesId = getDetail(details, "childResources")["objectId"]
         def childResArray = getHierarchically(childResourcesId, "al", "array")
         def childResources = getArrayContents(childResArray)
+//        def childResources = []
+        def resourceTypeId = getDetail(details, "resourceType")["objectId"]
+        def resourceTypeDetails = getObjectDetails(resourceTypeId)
+        def resourceContainerId = getReferentObjectIds(details, "org.rhq.core.pc.inventory.ResourceContainer",
+                "resource")[0]
+        def resourceContainerDetails = getObjectDetails(resourceContainerId)
 
         return [
-                objectId           : resourceObjectId,
-                id                 : getDetail(details, "id")["value"],
-                name               : getDetail(details, "name")["value"],
-                resourceKey        : getDetail(details, "resourceKey")["value"],
-                pluginConfiguration: getConfiguration(getDetail(details, "pluginConfiguration")["objectId"]),
-                children           : childResources.collect {
+                objectId             : resourceObjectId,
+                id                   : getDetail(details, "id")["value"],
+                name                 : getDetail(details, "name")["value"],
+                resourceKey          : getDetail(details, "resourceKey")["value"],
+                availability         : getEnumName(getDetail(resourceContainerDetails, "currentAvailType")["objectId"]),
+                pluginConfiguration  : getConfiguration(getDetail(details, "pluginConfiguration")["objectId"]),
+                resourceConfiguration: getConfiguration(getDetail(details, "resourceConfiguration")["objectId"]),
+                enabledMetrics       : getMetrics(getDetail(resourceContainerDetails, "measurementSchedule")
+                        ["objectId"]),
+                resourceType         : [
+                        objectId                       : resourceTypeId,
+                        id                             : getDetail(resourceTypeDetails, "id")["value"],
+                        name                           : getDetail(resourceTypeDetails, "name")["value"],
+                        plugin                         : getDetail(resourceTypeDetails, "plugin")["value"],
+                        pluginConfigurationDefinition  : getConfigurationDefinition(getDetail(resourceTypeDetails,
+                                "pluginConfigurationDefinition")["objectId"]),
+                        resourceConfigurationDefinition: getConfigurationDefinition(getDetail(resourceTypeDetails,
+                                "resourceTypeConfigurationDefinition")["objectId"])
+                ],
+                children             : childResources.collect {
                     getResourceObjectDetails(it.objectId)
                 }.sort {a, b -> a.resourceKey.compareTo(b.resourceKey)}
         ]
@@ -73,19 +94,75 @@ class RHQHeapDumpBrowser {
         }.sort {a, b -> a.key.compareTo(b.key)}
     }
 
+    private Map<String, Object> getConfigurationDefinition(String configDefObjectId) {
+        def table = getHierarchically(configDefObjectId, "propertyDefinitions", "table")
+        def tableContents = getArrayContents(table)
+        tableContents.collectEntries {
+            def value = getHierarchically(it.objectId, "value")
+            [(getDetail(value, "name")["value"]): [
+                    defaultValue   : getDetail(value, "defaultValue")["value"],
+                    enumeratedValue: getDetail(value, "enumeratedValue")["value"],
+                    type           : getEnumName(getDetail(value, "type")["objectId"]),
+                    unit           : getEnumName(getDetail(value, "unit")["objectId"])
+            ]]
+        }.sort {a, b -> a.key.compareTo(b.key)}
+    }
+
+    private String getEnumName(String availTypeObjectId) {
+        getDetail(getObjectDetails(availTypeObjectId), "name")["value"]
+    }
+
+    private Map<String, Object> getMetrics(String measurementSchedulesObjectId) {
+        def _set = getHierarchically(measurementSchedulesObjectId, "_set")
+        def _setContents = getArrayContents(_set)
+        _setContents.findAll {!it["value"].startsWith("java.lang.Object")}
+                .collect {getObjectDetails(it["objectId"])}.
+                findAll {
+                    getDetail(it, "enabled")["value"] == "true"
+                }.collectEntries {
+                    [(getDetail(it, "name")["value"]): [
+                            interval  : getDetail(it, "interval")["value"],
+                            scheduleId: getDetail(it, "scheduleId")["value"],
+                    ]]
+                }
+    }
+
     private Map<String, String> getDetail(List<String> html, String detail) {
         def value = html.findAll {it.startsWith(detail)}[0]
         def matcher = value =~
                 /$detail \(\w\) : (<a href="..\/object\/(0x[0-9a-f]+)">)?(.*)(( \(\d+ bytes\)<\/a>)|<br>)$/
         if (!matcher.matches()) {
-            println(value)
+            [:]
+        } else {
+            ["objectId": matcher.group(2), "value": matcher.group(3).replace("&quot;", "\"")]
         }
-        ["objectId": matcher.group(2), "value": matcher.group(3).replace("&quot;", "\"")]
     }
 
     private List<String> getObjectDetails(String objectId) {
         def result = client.get(path: "/object/$objectId", contentType: ContentType.TEXT)
         result.data.readLines()
+    }
+
+    private List<String> getReferentObjectIds(List<String> html, String referentType, String referringField) {
+        def ret = []
+        def skipNext = false
+        html.eachWithIndex {line, i ->
+            if (skipNext) {
+                skipNext = false
+            } else {
+                def matcher = line =~
+                        /<a href="..\/object\/(0x[0-9a-f]+)">$referentType@0x[a-f0-9]+ \(\d+ bytes\)<\/a>$/
+                if (matcher.matches()) {
+                    //check if the second line contains the correct referring field
+                    def fieldMatcher = html[i + 1] =~ / : field $referringField<br>$/
+                    if (fieldMatcher.matches()) {
+                        ret += matcher.group(1)
+                        skipNext = true
+                    }
+                }
+            }
+        }
+        ret
     }
 
     private List<Map<String, String>> getArrayContents(List<String> details) {
