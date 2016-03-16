@@ -49,11 +49,11 @@ class RHQHeapDumpBrowser {
     private getResourceObjectDetails(String resourceObjectId) {
         def details = getObjectDetails(resourceObjectId)
 
-        def childResourcesId = getDetail(details, "childResources")["objectId"]
+        def childResourcesId = getDetail(details, "childResources").objectId
         def childResArray = getHierarchically(childResourcesId, "al", "array")
         def childResources = getArrayContents(childResArray)
 //        def childResources = []
-        def resourceTypeId = getDetail(details, "resourceType")["objectId"]
+        def resourceTypeId = getDetail(details, "resourceType").objectId
         def resourceTypeDetails = getObjectDetails(resourceTypeId)
         def resourceContainerId = getReferentObjectIds(details, "org.rhq.core.pc.inventory.ResourceContainer",
                 "resource")[0]
@@ -61,23 +61,23 @@ class RHQHeapDumpBrowser {
 
         return [
                 objectId             : resourceObjectId,
-                id                   : getDetail(details, "id")["value"],
-                name                 : getDetail(details, "name")["value"],
-                resourceKey          : getDetail(details, "resourceKey")["value"],
-                availability         : getEnumName(getDetail(resourceContainerDetails, "currentAvailType")["objectId"]),
-                pluginConfiguration  : getConfiguration(getDetail(details, "pluginConfiguration")["objectId"]),
-                resourceConfiguration: getConfiguration(getDetail(details, "resourceConfiguration")["objectId"]),
-                enabledMetrics       : getMetrics(getDetail(resourceContainerDetails, "measurementSchedule")
-                        ["objectId"]),
+                id                   : getDetail(details, "id").value,
+                name                 : getDetail(details, "name").value,
+                resourceKey          : getDetail(details, "resourceKey").value,
+                availability         : getEnumName(getDetail(resourceContainerDetails, "currentAvailType").objectId),
+                componentClass       : getDetail(resourceContainerDetails, "resourceComponent").value,
+                pluginConfiguration  : getConfiguration(getDetail(details, "pluginConfiguration").objectId),
+                resourceConfiguration: getConfiguration(getDetail(details, "resourceConfiguration").objectId),
+                enabledMetrics       : getMetrics(getDetail(resourceContainerDetails, "measurementSchedule").objectId),
                 resourceType         : [
                         objectId                       : resourceTypeId,
-                        id                             : getDetail(resourceTypeDetails, "id")["value"],
-                        name                           : getDetail(resourceTypeDetails, "name")["value"],
-                        plugin                         : getDetail(resourceTypeDetails, "plugin")["value"],
+                        id                             : getDetail(resourceTypeDetails, "id").value,
+                        name                           : getDetail(resourceTypeDetails, "name").value,
+                        plugin                         : getDetail(resourceTypeDetails, "plugin").value,
                         pluginConfigurationDefinition  : getConfigurationDefinition(getDetail(resourceTypeDetails,
-                                "pluginConfigurationDefinition")["objectId"]),
+                                "pluginConfigurationDefinition").objectId),
                         resourceConfigurationDefinition: getConfigurationDefinition(getDetail(resourceTypeDetails,
-                                "resourceTypeConfigurationDefinition")["objectId"])
+                                "resourceTypeConfigurationDefinition").objectId)
                 ],
                 children             : childResources.collect {
                     getResourceObjectDetails(it.objectId)
@@ -86,55 +86,62 @@ class RHQHeapDumpBrowser {
     }
 
     private Map<String, String> getConfiguration(String configObjectId) {
-        def table = getHierarchically(configObjectId, "properties", "table")
-        def tableContents = getArrayContents(table)
-        tableContents.collectEntries {
-            def value = getHierarchically(it.objectId, "value")
-            [(getDetail(value, "name")["value"]): getDetail(value, "stringValue")["value"]]
-        }.sort {a, b -> a.key.compareTo(b.key)}
+        def props = getHierarchically(configObjectId, "properties")
+        def propMembers = getHashMapContents(props)
+
+        propMembers.collectEntries {
+            def name = it.getKey().value;
+            def property = getObjectDetails(it.getValue().objectId)
+            def value = getDetail(property, "stringValue").value
+
+            [(name): value]
+        }.sort {a, b -> a.key.compareTo(b.key)} as Map<String, String>
     }
 
     private Map<String, Object> getConfigurationDefinition(String configDefObjectId) {
-        def table = getHierarchically(configDefObjectId, "propertyDefinitions", "table")
-        def tableContents = getArrayContents(table)
-        tableContents.collectEntries {
-            def value = getHierarchically(it.objectId, "value")
-            [(getDetail(value, "name")["value"]): [
-                    defaultValue   : getDetail(value, "defaultValue")["value"],
-                    enumeratedValue: getDetail(value, "enumeratedValue")["value"],
-                    type           : getEnumName(getDetail(value, "type")["objectId"]),
-                    unit           : getEnumName(getDetail(value, "unit")["objectId"])
+        def props = getHierarchically(configDefObjectId, "propertyDefinitions")
+        def propMembers = getHashMapContents(props)
+
+        propMembers.collectEntries {
+            def name = it.getKey().value;
+            def property = getObjectDetails(it.getValue().objectId)
+
+            [(name): [
+                    defaultValue   : getDetail(property, "defaultValue").value,
+                    enumeratedValue: getDetail(property, "enumeratedValue").value,
+                    type           : getEnumName(getDetail(property, "type").objectId),
+                    unit           : getEnumName(getDetail(property, "unit").objectId)
             ]]
-        }.sort {a, b -> a.key.compareTo(b.key)}
+        }.sort {a, b -> a.key.compareTo(b.key)} as Map<String, Object>
     }
 
     private String getEnumName(String availTypeObjectId) {
-        getDetail(getObjectDetails(availTypeObjectId), "name")["value"]
+        getDetail(getObjectDetails(availTypeObjectId), "name").value
     }
 
     private Map<String, Object> getMetrics(String measurementSchedulesObjectId) {
         def _set = getHierarchically(measurementSchedulesObjectId, "_set")
         def _setContents = getArrayContents(_set)
-        _setContents.findAll {!it["value"].startsWith("java.lang.Object")}
-                .collect {getObjectDetails(it["objectId"])}.
+        _setContents.findAll {!it.value.startsWith("java.lang.Object")}
+                .collect {getObjectDetails(it.objectId)}.
                 findAll {
-                    getDetail(it, "enabled")["value"] == "true"
+                    getDetail(it, "enabled").value == "true"
                 }.collectEntries {
-                    [(getDetail(it, "name")["value"]): [
-                            interval  : getDetail(it, "interval")["value"],
-                            scheduleId: getDetail(it, "scheduleId")["value"],
+                    [(getDetail(it, "name").value): [
+                            interval  : getDetail(it, "interval").value,
+                            scheduleId: getDetail(it, "scheduleId").value,
                     ]]
                 }
     }
 
-    private Map<String, String> getDetail(List<String> html, String detail) {
+    private static Detail getDetail(List<String> html, String detail) {
         def value = html.findAll {it.startsWith(detail)}[0]
         def matcher = value =~
                 /$detail \(\w\) : (<a href="..\/object\/(0x[0-9a-f]+)">)?(.*)(( \(\d+ bytes\)<\/a>)|<br>)$/
         if (!matcher.matches()) {
-            [:]
+            new Detail()
         } else {
-            ["objectId": matcher.group(2), "value": matcher.group(3).replace("&quot;", "\"")]
+            new Detail(matcher.group(2), matcher.group(3).replace("&quot;", "\""))
         }
     }
 
@@ -143,7 +150,7 @@ class RHQHeapDumpBrowser {
         result.data.readLines()
     }
 
-    private List<String> getReferentObjectIds(List<String> html, String referentType, String referringField) {
+    private static List<String> getReferentObjectIds(List<String> html, String referentType, String referringField) {
         def ret = []
         def skipNext = false
         html.eachWithIndex {line, i ->
@@ -165,7 +172,32 @@ class RHQHeapDumpBrowser {
         ret
     }
 
-    private List<Map<String, String>> getArrayContents(List<String> details) {
+    private Map<Detail, Detail> getHashMapContents(List<String> hashMapDetails) {
+        def table = getObjectDetails(getDetail(hashMapDetails, "table").objectId)
+        def tableContents = getArrayContents(table)
+        def ret = [:]
+
+        tableContents.each {
+            def entry =  getObjectDetails(it.objectId)
+            def key = getDetail(entry, "key")
+            def value = getDetail(entry, "value")
+
+            ret.put(key, value)
+
+            def nextObjectId = getDetail(entry, "next").objectId
+            while (nextObjectId != null) {
+                def next = getObjectDetails(nextObjectId)
+                key = getDetail(next, "key")
+                value = getDetail(next, "value")
+                ret.put(key, value)
+                nextObjectId = getDetail(next, "next").objectId
+            }
+        }
+
+        ret
+    }
+
+    private static List<Detail> getArrayContents(List<String> details) {
         def nonNulls = details.findAll {
             it.indexOf("null") == -1 && it ==~ /^\d+ : .*>$/
         }
@@ -173,14 +205,14 @@ class RHQHeapDumpBrowser {
         nonNulls.collect {
             def matcher = it =~ /\d+ : (<a href="..\/object\/(0x[0-9a-f]+)">)?(.*) \(\d+ bytes\)(<\/a>)?$/
             matcher.matches()
-            ["objectId": matcher.group(2), "value": matcher.group(3)]
+            new Detail(matcher.group(2), matcher.group(3))
         }
     }
 
     private List<String> getHierarchically(String objectId, String... properties) {
         def details = getObjectDetails(objectId)
         properties.each {
-            def propId = getDetail(details, it)["objectId"]
+            def propId = getDetail(details, it).objectId
             details = getObjectDetails(propId)
         }
         return details
@@ -190,6 +222,33 @@ class RHQHeapDumpBrowser {
         def b = new RHQHeapDumpBrowser()
         def json = JsonOutput.prettyPrint(JsonOutput.toJson(b.getResourceDetails(Integer.valueOf(args[0]))))
         println(json)
+    }
+    
+    static class Detail {
+        String objectId;
+        String value;
+        
+        Detail() {}
+        
+        Detail(String objectId, String value) {
+            this.objectId = objectId;
+            this.value = value;
+        }
+
+        boolean equals(o) {
+            if (this.is(o)) return true
+            if (getClass() != o.class) return false
+
+            Detail detail = (Detail) o
+
+            if (objectId != detail.objectId) return false
+
+            return true
+        }
+
+        int hashCode() {
+            return objectId.hashCode()
+        }
     }
 }
 
